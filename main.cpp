@@ -6,6 +6,8 @@
 #include <ctime>
 #include "QuadTree.h"
 
+using namespace std;
+
 const int WIDTH = 1000;
 const int HEIGHT = 800;
 
@@ -20,8 +22,8 @@ enum Screen { MENU, VISUALIZATION, GAME_MODE };
 Screen currentScreen = MENU;
 
 Particle player;
-std::vector<Particle> entities; 
-std::vector<Particle> visParticles; 
+vector<Particle> entities; 
+vector<Particle> visParticles; 
 int nextId = 1;
 
 void SpawnFood() {
@@ -96,7 +98,7 @@ void UpdateAndRender(HWND hwnd, HDC hdc) {
 
         for (auto& p : visParticles) {
             Rectangle2D areaDeChoque = { p.x - p.radius*2, p.y - p.radius*2, p.radius * 4, p.radius * 4 };
-            std::vector<Particle> vecindario;
+            vector<Particle> vecindario;
             qtree.query(areaDeChoque, vecindario, dummy);
 
             for (const auto& vecino : vecindario) {
@@ -148,10 +150,10 @@ void UpdateAndRender(HWND hwnd, HDC hdc) {
         for (const auto& e : entities) qtree.insert(e);
         qtree.insert(player);
 
-        std::vector<int> idsToRemove;
+        vector<int> idsToRemove;
 
         Rectangle2D playerBox = { player.x - player.radius, player.y - player.radius, player.radius * 2, player.radius * 2 };
-        std::vector<Particle> playerNearby;
+        vector<Particle> playerNearby;
         qtree.query(playerBox, playerNearby, dummy);
 
         for (const auto& n : playerNearby) {
@@ -177,7 +179,7 @@ void UpdateAndRender(HWND hwnd, HDC hdc) {
         for (auto& e : entities) {
             if (!e.isEnemy) continue;
             Rectangle2D enemyBox = { e.x - e.radius, e.y - e.radius, e.radius * 2, e.radius * 2 };
-            std::vector<Particle> enemyNearby;
+            vector<Particle> enemyNearby;
             qtree.query(enemyBox, enemyNearby, dummy);
 
             for (const auto& n : enemyNearby) {
@@ -197,7 +199,7 @@ void UpdateAndRender(HWND hwnd, HDC hdc) {
         }
 
         if (!idsToRemove.empty()) {
-            std::vector<Particle> remainingEntities;
+            vector<Particle> remainingEntities;
             for (const auto& e : entities) {
                 bool remove = false;
                 for (int id : idsToRemove) {
@@ -219,7 +221,7 @@ void UpdateAndRender(HWND hwnd, HDC hdc) {
     DeleteObject(hBg);
 
     if (currentScreen == MENU) {
-        TextOutA(hdcMem, WIDTH/2 - 120, 200, "PROYECTO 2 - QUADTREE", 21);
+        TextOutA(hdcMem, WIDTH/2 - 120, 200, "PROYECTO 2", 10);
         TextOutA(hdcMem, WIDTH/2 - 150, 300, "[1] QUADTREE", 12);
         TextOutA(hdcMem, WIDTH/2 - 150, 350, "[2] JUEGO   ", 12);
     } 
@@ -238,8 +240,8 @@ void UpdateAndRender(HWND hwnd, HDC hdc) {
                 COLORREF c = p.highlighted ? RGB(255, 191, 0) : RGB(44, 62, 80);
                 DrawCircleHelper(hdcMem, p.x, p.y, p.radius, c);
             }
-            TextOutA(hdcMem, 10, 10, "MODO 1: Laboratorio de Colisiones Autonomas | Particulas en Conflicto = Dorado", 77);
-            TextOutA(hdcMem, 10, 30, "Regresar al Menu: Presiona [M]", 30);
+            TextOutA(hdcMem, 10, 10, "MODO 1: Colisiones Autonomas", 28);
+            TextOutA(hdcMem, 10, 30, "[M] Regresar al Menu", 20);
         } 
         else {
             for (const auto& e : entities) {
@@ -248,10 +250,10 @@ void UpdateAndRender(HWND hwnd, HDC hdc) {
             }
             DrawCircleHelper(hdcMem, player.x, player.y, player.radius, RGB(0, 162, 232));
 
-            std::string status = "MODO 2: Juego Agar.io | Tu Radio: " + std::to_string((int)player.radius) + " / " + std::to_string((int)MAX_PLAYER_RADIUS);
+            string status = "MODO 2: Juego | Tu Radio: " + to_string((int)player.radius) + " / " + to_string((int)MAX_PLAYER_RADIUS);
             if (player.radius >= MAX_PLAYER_RADIUS) status += " (MAX!)";
             TextOutA(hdcMem, 10, 10, status.c_str(), status.length());
-            TextOutA(hdcMem, 10, 30, "Regresar al Menu: Presiona [M]", 30);
+            TextOutA(hdcMem, 10, 30, "[M] Regresar al Menu", 20);
         }
     }
 
@@ -285,7 +287,7 @@ int main() {
     wc.hInstance = hInstance;
     wc.lpszClassName = "QuadTreeWinClass";
     RegisterClassA(&wc);
-    HWND hwnd = CreateWindowExA(0, "QuadTreeWinClass", "Proyecto QuadTree - Modos Optimizados", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, WIDTH + 16, HEIGHT + 39, NULL, NULL, hInstance, NULL);
+    HWND hwnd = CreateWindowExA(0, "QuadTreeWinClass", "Proyecto QuadTree", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, WIDTH + 16, HEIGHT + 39, NULL, NULL, hInstance, NULL);
     MSG msg = { 0 };
     HDC hdc = GetDC(hwnd);
     while (msg.message != WM_QUIT) {
