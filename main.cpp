@@ -9,27 +9,37 @@
 const int WIDTH = 1000;
 const int HEIGHT = 800;
 
+// Constantes de población para mantener el mapa vivo
+const int MAX_FOOD = 60;
+const int MAX_ENEMIES = 15;
+
 enum Screen { MENU, VISUALIZATION, GAME_MODE };
 Screen currentScreen = MENU;
 
 Particle player;
 std::vector<Particle> entities;
+int nextId = 1; // Generador de IDs únicos para el control de entidades
+
+void SpawnFood() {
+    entities.push_back({ nextId++, (double)(rand() % (WIDTH - 40) + 20), (double)(rand() % (HEIGHT - 40) + 20), 0, 0, 5.0, true, false, false, false });
+}
+
+void SpawnEnemy() {
+    double vx = ((rand() % 100) / 50.0) - 1.0;
+    double vy = ((rand() % 100) / 50.0) - 1.0;
+    if (vx == 0 && vy == 0) { vx = 1; vy = 1; }
+    entities.push_back({ nextId++, (double)(rand() % (WIDTH - 100) + 50), (double)(rand() % (HEIGHT - 100) + 50), 
+                          vx * 2, vy * 2, (double)(rand() % 20 + 15), false, true, false, false });
+}
 
 void ResetSimulation() {
     entities.clear();
-    player = { 0, (double)WIDTH/2, (double)HEIGHT/2, 0, 0, 20.0, false, false, true, false };
+    nextId = 1;
+    player = { nextId++, (double)WIDTH/2, (double)HEIGHT/2, 0, 0, 20.0, false, false, true, false };
     
-    // Generar comida (Verde)
-    for (int i = 1; i <= 60; i++) {
-        entities.push_back({ i, (double)(rand() % (WIDTH - 40) + 20), (double)(rand() % (HEIGHT - 40) + 20), 0, 0, 5.0, true, false, false, false });
-    }
-    // Generar enemigos (Rojo)
-    for (int i = 61; i <= 75; i++) {
-        double vx = ((rand() % 100) / 50.0) - 1.0;
-        double vy = ((rand() % 100) / 50.0) - 1.0;
-        entities.push_back({ i, (double)(rand() % (WIDTH - 100) + 50), (double)(rand() % (HEIGHT - 100) + 50), 
-                              vx * 2, vy * 2, (double)(rand() % 20 + 15), false, true, false, false });
-    }
+    // Generar población inicial
+    for (int i = 0; i < MAX_FOOD; i++) SpawnFood();
+    for (int i = 0; i < MAX_ENEMIES; i++) SpawnEnemy();
 }
 
 void DrawCircleHelper(HDC hdc, int x, int y, int radius, COLORREF color, bool outlineOnly = false) {
@@ -47,16 +57,27 @@ void DrawCircleHelper(HDC hdc, int x, int y, int radius, COLORREF color, bool ou
 }
 
 void UpdateAndRender(HWND hwnd, HDC hdc) {
+    // --- REAPARECER ENTIDADES CONSTANTEMENTE (Sustitución en tiempo real) ---
+    if (currentScreen != MENU) {
+        int currentFoodCount = 0;
+        int currentEnemyCount = 0;
+        for (const auto& e : entities) {
+            if (e.isFood) currentFoodCount++;
+            if (e.isEnemy) currentEnemyCount++;
+        }
+        while (currentFoodCount < MAX_FOOD) { SpawnFood(); currentFoodCount++; }
+        while (currentEnemyCount < MAX_ENEMIES) { SpawnEnemy(); currentEnemyCount++; }
+    }
+
     // --- LÓGICA DE ACTUALIZACIÓN ---
     if (currentScreen != MENU) {
-        // Obtener posición del mouse relativo a la ventana
         POINT mousePos;
         GetCursorPos(&mousePos);
         ScreenToClient(hwnd, &mousePos);
         player.x = mousePos.x;
         player.y = mousePos.y;
 
-        // Actualizar enemigos
+        // Actualizar movimiento de enemigos
         for (auto& e : entities) {
             if (e.isEnemy) {
                 e.x += e.vx; e.y += e.vy;
@@ -66,11 +87,13 @@ void UpdateAndRender(HWND hwnd, HDC hdc) {
             e.highlighted = false;
         }
 
-        // Construir QuadTree
+        // Construir QuadTree dinámico del Frame
         Rectangle2D screenBounds = { 0, 0, (double)WIDTH, (double)HEIGHT };
         QuadTree qtree(screenBounds, 4);
         for (const auto& e : entities) qtree.insert(e);
         qtree.insert(player);
+
+        std::vector<int> idsToRemove;
 
         if (currentScreen == VISUALIZATION) {
             double rangeSize = 100.0;
@@ -86,34 +109,77 @@ void UpdateAndRender(HWND hwnd, HDC hdc) {
             }
         } 
         else if (currentScreen == GAME_MODE) {
+            // 1. COLISIONES DEL JUGADOR USANDO QUADTREE
             Rectangle2D playerBox = { player.x - player.radius, player.y - player.radius, player.radius * 2, player.radius * 2 };
-            std::vector<Particle> nearby;
+            std::vector<Particle> playerNearby;
             int dummy = 0;
-            qtree.query(playerBox, nearby, dummy);
+            qtree.query(playerBox, playerNearby, dummy);
 
-            for (const auto& n : nearby) {
+            for (const auto& n : playerNearby) {
                 if (n.isPlayer) continue;
                 double dist = hypot(player.x - n.x, player.y - n.y);
                 if (dist < player.radius + n.radius) {
                     if (n.isFood) {
-                        player.radius += 0.5;
-                        for (auto it = entities.begin(); it != entities.end(); ++it) {
-                            if (it->id == n.id) { entities.erase(it); break; }
+                        player.radius += 0.5; // Crece con comida
+                        idsToRemove.push_back(n.id);
+                    } 
+                    else if (n.isEnemy) {
+                        if (player.radius > n.radius) {
+                            player.radius += n.radius * 0.3; // ¡El jugador se come al enemigo menor!
+                            idsToRemove.push_back(n.id);
+                        } else {
+                            ResetSimulation(); // El enemigo es más grande: El jugador muere
+                            return; 
                         }
-                    } else if (n.isEnemy && n.radius > player.radius) {
-                        ResetSimulation(); // Muere y reinicia
                     }
                 }
+            }
+
+            // 2. COLISIONES DE ENEMIGOS USANDO QUADTREE (Enemigos comen comida y otros enemigos)
+            for (auto& e : entities) {
+                if (!e.isEnemy) continue;
+
+                Rectangle2D enemyBox = { e.x - e.radius, e.y - e.radius, e.radius * 2, e.radius * 2 };
+                std::vector<Particle> enemyNearby;
+                qtree.query(enemyBox, enemyNearby, dummy);
+
+                for (const auto& n : enemyNearby) {
+                    if (n.id == e.id || n.isPlayer) continue; // Ignorarse a sí mismo y al jugador (ya procesado)
+
+                    double dist = hypot(e.x - n.x, e.y - n.y);
+                    if (dist < e.radius + n.radius) {
+                        if (n.isFood) {
+                            e.radius += 0.3; // El enemigo crece comiendo comida estática
+                            idsToRemove.push_back(n.id);
+                        } 
+                        else if (n.isEnemy && e.radius > n.radius) {
+                            e.radius += n.radius * 0.2; // ¡El enemigo grande canibaliza al enemigo chico!
+                            idsToRemove.push_back(n.id);
+                        }
+                    }
+                }
+            }
+
+            // Limpieza eficiente de entidades comidas de forma segura
+            if (!idsToRemove.empty()) {
+                std::vector<Particle> remainingEntities;
+                for (const auto& e : entities) {
+                    bool remove = false;
+                    for (int id : idsToRemove) {
+                        if (e.id == id) { remove = true; break; }
+                    }
+                    if (!remove) remainingEntities.push_back(e);
+                }
+                entities = remainingEntities;
             }
         }
     }
 
-    // --- RENDERIZADO (Doble Buffer para evitar parpadeo) ---
+    // --- RENDERIZADO (Doble Buffer nativo) ---
     HDC hdcMem = CreateCompatibleDC(hdc);
     HBITMAP hbmMem = CreateCompatibleBitmap(hdc, WIDTH, HEIGHT);
     HBITMAP hOldBm = (HBITMAP)SelectObject(hdcMem, hbmMem);
 
-    // Fondo Blanco
     HBRUSH hBg = CreateSolidBrush(RGB(255, 255, 255));
     RECT rectText = { 0, 0, WIDTH, HEIGHT };
     FillRect(hdcMem, &rectText, hBg);
@@ -121,35 +187,32 @@ void UpdateAndRender(HWND hwnd, HDC hdc) {
 
     if (currentScreen == MENU) {
         TextOutA(hdcMem, WIDTH/2 - 120, 200, "PROYECTO QUADTREE (Agar.io)", 27);
-        TextOutA(hdcMem, WIDTH/2 - 150, 300, "Presiona [1] para Ver Modo Colisiones", 37);
-        TextOutA(hdcMem, WIDTH/2 - 150, 350, "Presiona [2] para Ver Modo Juego Activo", 39);
+        TextOutA(hdcMem, WIDTH/2 - 150, 300, "Presiona [1] para Modo Colisiones", 33);
+        TextOutA(hdcMem, WIDTH/2 - 150, 350, "Presiona [2] para Modo Juego Activo", 35);
     } 
     else {
-        // Dibujar líneas del QuadTree
         Rectangle2D screenBounds = { 0, 0, (double)WIDTH, (double)HEIGHT };
         QuadTree drawTree(screenBounds, 4);
         for (const auto& e : entities) drawTree.insert(e);
         drawTree.drawLines(hdcMem);
 
-        // Dibujar entidades
         for (const auto& e : entities) {
             COLORREF c = e.isFood ? RGB(0, 200, 0) : RGB(230, 0, 0);
-            if (e.highlighted && currentScreen == VISUALIZATION) c = RGB(255, 200, 0); // Amarillo
+            if (e.highlighted && currentScreen == VISUALIZATION) c = RGB(255, 200, 0);
             DrawCircleHelper(hdcMem, e.x, e.y, e.radius, c);
         }
 
-        // Dibujar jugador (Azul)
         DrawCircleHelper(hdcMem, player.x, player.y, player.radius, RGB(0, 100, 255));
 
         if (currentScreen == VISUALIZATION) {
-            TextOutA(hdcMem, 10, 10, "Modo: Visualizacion de Vecinos. Regresar al Menu: [M]", 52);
-            DrawCircleHelper(hdcMem, player.x, player.y, 50, RGB(150, 0, 255), true); // Radio de búsqueda visual
+            TextOutA(hdcMem, 10, 10, "Modo: Visualizacion de Vecinos. Menu: [M]", 41);
+            DrawCircleHelper(hdcMem, player.x, player.y, 50, RGB(150, 0, 255), true);
         } else {
-            TextOutA(hdcMem, 10, 10, "Modo: Juego Activo. Regresar al Menu: [M]", 41);
+            std::string scoreStr = "Modo: Juego Activo. Menu: [M] | Tu Radio: " + std::to_string((int)player.radius);
+            TextOutA(hdcMem, 10, 10, scoreStr.c_str(), scoreStr.length());
         }
     }
 
-    // Copiar buffer a la pantalla
     BitBlt(hdc, 0, 0, WIDTH, HEIGHT, hdcMem, 0, 0, SRCCOPY);
     SelectObject(hdcMem, hOldBm);
     DeleteObject(hbmMem);
@@ -181,24 +244,21 @@ int main() {
     wc.lpszClassName = "QuadTreeWinClass";
     RegisterClassA(&wc);
 
-    HWND hwnd = CreateWindowExA(0, "QuadTreeWinClass", "Proyecto QuadTree - Agar.io Nativo", 
+    HWND hwnd = CreateWindowExA(0, "QuadTreeWinClass", "Proyecto QuadTree - Agar.io Evolucionado", 
                                 WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, 
                                 WIDTH + 16, HEIGHT + 39, NULL, NULL, hInstance, NULL);
 
     MSG msg = { 0 };
     HDC hdc = GetDC(hwnd);
 
-    // Bucle principal de simulación
     while (msg.message != WM_QUIT) {
         if (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
+            TranslateMessage(&msg);DispatchMessage(&msg);
         } else {
             UpdateAndRender(hwnd, hdc);
-            Sleep(16); // Controlar FPS aproximado (~60 FPS)
+            Sleep(16);
         }
     }
-
     ReleaseDC(hwnd, hdc);
     return 0;
 }
