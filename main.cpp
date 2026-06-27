@@ -1,5 +1,5 @@
 #include "QuadTree.h"
-#include <chrono> // Necesario para medir el tiempo en microsegundos
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
@@ -11,26 +11,74 @@ using namespace std;
 
 const int WIDTH = 1000;
 const int HEIGHT = 800;
-
 const int MAX_FOOD = 35;
 const int MAX_ENEMIES = 15;
 const double MAX_PLAYER_RADIUS = 65.0;
 const double MAX_ENEMY_RADIUS = 80.0;
 
-// Variables globales para la visualización y análisis
 enum Screen { MENU, VISUALIZATION, GAME_MODE };
 Screen currentScreen = MENU;
+
+enum Distribution { UNIFORM, CLUSTER, HIGH_DENSITY };
+Distribution currentDist = UNIFORM;
 
 Particle player;
 vector<Particle> entities;
 vector<Particle> visParticles;
 int nextId = 1;
 
-// Variables de estado para la Comparación Experimental
+// Variables para la Comparación Experimental
 bool useQuadTree = true;
-long long timeTakenUs = 0; // Tiempo en microsegundos
-int totalChecks = 0;       // Contador de operaciones
-int currentVisCount = 200; // Cantidad inicial de partículas
+long long timeTakenUs = 0;
+int totalChecks = 0;
+int currentVisCount = 1000;
+
+void SetupVisualizationMode(int count, Distribution dist) {
+  visParticles.clear();
+  nextId = 1;
+
+  vector<Vector2> clusters = {{200, 200}, {800, 200}, {500, 600}};
+
+  for (int i = 0; i < count; i++) {
+    double vx = (GetRandomValue(0, 100) / 50.0) - 1.0;
+    double vy = (GetRandomValue(0, 100) / 50.0) - 1.0;
+    if (vx == 0 && vy == 0) {
+      vx = 0.5;
+      vy = 0.5;
+    }
+
+    double px, py;
+
+    if (dist == UNIFORM) {
+      px = GetRandomValue(20, WIDTH - 20);
+      py = GetRandomValue(20, HEIGHT - 20);
+    } else if (dist == CLUSTER) {
+      int c = GetRandomValue(0, 2);
+      px = clusters[c].x + GetRandomValue(-100, 100);
+      py = clusters[c].y + GetRandomValue(-100, 100);
+    } else if (dist == HIGH_DENSITY) {
+      if (GetRandomValue(1, 100) <= 80) {
+        px = WIDTH / 2 + GetRandomValue(-150, 150);
+        py = HEIGHT / 2 + GetRandomValue(-150, 150);
+      } else {
+        px = GetRandomValue(20, WIDTH - 20);
+        py = GetRandomValue(20, HEIGHT - 20);
+      }
+    }
+
+    if (px < 20)
+      px = 20;
+    if (px > WIDTH - 20)
+      px = WIDTH - 20;
+    if (py < 20)
+      py = 20;
+    if (py > HEIGHT - 20)
+      py = HEIGHT - 20;
+
+    visParticles.push_back({nextId++, px, py, vx * 3.0, vy * 3.0, 5.0, false,
+                            false, false, false});
+  }
+}
 
 void SpawnFood() {
   entities.push_back({nextId++, (double)(GetRandomValue(20, WIDTH - 20)),
@@ -52,26 +100,6 @@ void SpawnEnemy() {
                       false, false});
 }
 
-void SpawnVisParticle() {
-  double vx = (GetRandomValue(0, 100) / 50.0) - 1.0;
-  double vy = (GetRandomValue(0, 100) / 50.0) - 1.0;
-  if (vx == 0 && vy == 0) {
-    vx = 0.5;
-    vy = 0.5;
-  }
-  visParticles.push_back({nextId++, (double)(GetRandomValue(20, WIDTH - 20)),
-                          (double)(GetRandomValue(20, HEIGHT - 20)), vx * 3.0,
-                          vy * 3.0, 5.0, false, false, false, false});
-}
-
-void SetupVisualizationMode(int count) {
-  visParticles.clear();
-  nextId = 1;
-  for (int i = 0; i < count; i++) {
-    SpawnVisParticle();
-  }
-}
-
 void ResetGameMode() {
   entities.clear();
   nextId = 1;
@@ -90,33 +118,31 @@ void ResetGameMode() {
   for (int i = 0; i < MAX_ENEMIES; i++)
     SpawnEnemy();
 }
+
 int main() {
   InitWindow(WIDTH, HEIGHT, "Proyecto 2: Simulador QuadTree");
   SetTargetFPS(60);
 
-  // --- CARGA DE FUENTE PERSONALIZADA ---
   Font customFont = LoadFontEx("font.ttf", 40, 0, 250);
 
-  SetupVisualizationMode(currentVisCount);
+  SetupVisualizationMode(currentVisCount, currentDist);
   ResetGameMode();
 
-  // Paleta de colores mejorada
   Color bgColor = {245, 245, 250, 255};
-  Color menuBgColor = {20, 30, 48,
-                       255}; // Fondo azul oscuro elegante para el menú
+  Color menuBgColor = {20, 30, 48, 255};
   Color colorFood = {34, 177, 76, 255};
   Color colorEnemy = {220, 20, 60, 255};
   Color colorPlayer = {0, 162, 232, 255};
   Color colorVisNormal = {44, 62, 80, 255};
   Color colorVisHighlight = {255, 60, 60, 255};
+  Color colorCandidate = {255, 165, 0, 255};
 
   while (!WindowShouldClose()) {
-    // --- 1. LÓGICA (UPDATE) ---
-    // (Toda la lógica de controles, QuadTree y colisiones se mantiene
-    // EXACTAMENTE IGUAL)
+
+    // --- LÓGICA (UPDATE) ---
     if (IsKeyPressed(KEY_ONE)) {
       currentScreen = VISUALIZATION;
-      SetupVisualizationMode(currentVisCount);
+      SetupVisualizationMode(currentVisCount, currentDist);
     }
     if (IsKeyPressed(KEY_TWO)) {
       currentScreen = GAME_MODE;
@@ -130,13 +156,20 @@ int main() {
     if (currentScreen == VISUALIZATION) {
       if (IsKeyPressed(KEY_C))
         useQuadTree = !useQuadTree;
-      if (IsKeyPressed(KEY_UP)) {
-        currentVisCount += 100;
-        SetupVisualizationMode(currentVisCount);
+
+      if (IsKeyPressed(KEY_D)) {
+        int nextDist = (currentDist + 1) % 3;
+        currentDist = static_cast<Distribution>(nextDist);
+        SetupVisualizationMode(currentVisCount, currentDist);
       }
-      if (IsKeyPressed(KEY_DOWN) && currentVisCount > 100) {
-        currentVisCount -= 100;
-        SetupVisualizationMode(currentVisCount);
+
+      if (IsKeyPressed(KEY_UP)) {
+        currentVisCount += 1000;
+        SetupVisualizationMode(currentVisCount, currentDist);
+      }
+      if (IsKeyPressed(KEY_DOWN) && currentVisCount > 1000) {
+        currentVisCount -= 1000;
+        SetupVisualizationMode(currentVisCount, currentDist);
       }
 
       for (auto &p : visParticles) {
@@ -146,7 +179,9 @@ int main() {
           p.vx *= -1;
         if (p.y - p.radius < 0 || p.y + p.radius > HEIGHT)
           p.vy *= -1;
+
         p.highlighted = false;
+        p.isFood = false;
       }
 
       auto start = chrono::high_resolution_clock::now();
@@ -157,7 +192,8 @@ int main() {
         for (const auto &p : visParticles)
           qtree.insert(p);
 
-        for (auto &p : visParticles) {
+        for (size_t i = 0; i < visParticles.size(); i++) {
+          auto &p = visParticles[i];
           Rectangle2D areaDeChoque = {p.x - p.radius * 2, p.y - p.radius * 2,
                                       p.radius * 4, p.radius * 4};
           vector<Particle> vecindario;
@@ -167,6 +203,14 @@ int main() {
             if (vecino.id == p.id)
               continue;
             totalChecks++;
+
+            if (i == 0) {
+              for (auto &vp : visParticles) {
+                if (vp.id == vecino.id)
+                  vp.isFood = true;
+              }
+            }
+
             double dist = hypot(p.x - vecino.x, p.y - vecino.y);
             if (dist < p.radius + vecino.radius) {
               p.highlighted = true;
@@ -307,17 +351,16 @@ int main() {
       }
     }
 
-    // --- 2. RENDERIZADO (DRAW) ---
+    // --- RENDERIZADO (DRAW) ---
     BeginDrawing();
 
     if (currentScreen == MENU) {
-      ClearBackground(menuBgColor); // Fondo distinto para el menú
+      ClearBackground(menuBgColor);
 
       const char *title = "PROYECTO 2: AED";
       const char *opt1 = "[1] ANALISIS ALGORITMICO (QuadTree vs Fuerza Bruta)";
       const char *opt2 = "[2] DEMOSTRACION APLICADA (Juego Interactivo)";
 
-      // Medir el texto para centrarlo matemáticamente
       Vector2 titleSize = MeasureTextEx(customFont, title, 40, 2);
       Vector2 opt1Size = MeasureTextEx(customFont, opt1, 24, 2);
       Vector2 opt2Size = MeasureTextEx(customFont, opt2, 24, 2);
@@ -329,7 +372,7 @@ int main() {
       DrawTextEx(customFont, opt2, {(WIDTH - opt2Size.x) / 2, 440}, 24, 2,
                  LIGHTGRAY);
     } else {
-      ClearBackground(bgColor); // Fondo claro para la simulación
+      ClearBackground(bgColor);
 
       if (currentScreen == VISUALIZATION) {
         if (useQuadTree) {
@@ -337,14 +380,29 @@ int main() {
           for (const auto &p : visParticles)
             drawTree.insert(p);
           drawTree.drawLines();
+
+          if (!visParticles.empty()) {
+            Particle p0 = visParticles[0];
+            DrawRectangleLines(p0.x - p0.radius * 2, p0.y - p0.radius * 2,
+                               p0.radius * 4, p0.radius * 4, YELLOW);
+            DrawCircleLines(p0.x, p0.y, p0.radius + 15, YELLOW);
+          }
         }
 
-        for (const auto &p : visParticles) {
-          Color c = p.highlighted ? colorVisHighlight : colorVisNormal;
+        for (size_t i = 0; i < visParticles.size(); i++) {
+          const auto &p = visParticles[i];
+          Color c = colorVisNormal;
+          if (useQuadTree && p.isFood && i != 0)
+            c = colorCandidate;
+          if (p.highlighted)
+            c = colorVisHighlight;
+          if (i == 0)
+            c = BLUE;
+
           DrawCircle(p.x, p.y, p.radius, c);
         }
 
-        DrawRectangle(10, 10, 480, 190, Fade(BLACK, 0.8f));
+        DrawRectangle(10, 10, 520, 220, Fade(BLACK, 0.8f));
 
         DrawTextEx(customFont, "MODO 1: Analisis de Rendimiento", {25, 20}, 24,
                    1, WHITE);
@@ -353,21 +411,28 @@ int main() {
                                                    ? "QUADTREE (O(N log N))"
                                                    : "FUERZA BRUTA (O(N^2))"),
                    {25, 60}, 20, 1, useQuadTree ? GREEN : RED);
+
+        string distStr = (currentDist == UNIFORM)   ? "Uniforme"
+                         : (currentDist == CLUSTER) ? "Clusters"
+                                                    : "Alta Densidad";
+        DrawTextEx(customFont,
+                   TextFormat("Distribucion [D]: %s", distStr.c_str()),
+                   {25, 90}, 18, 1, YELLOW);
         DrawTextEx(
             customFont,
             TextFormat("Tamano de entrada (N): %d particulas", currentVisCount),
-            {25, 90}, 18, 1, LIGHTGRAY);
-        DrawTextEx(
-            customFont,
-            TextFormat("Tiempo de ejecucion: %lld microsegundos", timeTakenUs),
             {25, 120}, 18, 1, LIGHTGRAY);
         DrawTextEx(customFont,
-                   TextFormat("Comprobaciones / Nodos: %d", totalChecks),
+                   TextFormat("Tiempo de ejecucion: %lld us", timeTakenUs),
                    {25, 150}, 18, 1, LIGHTGRAY);
-
         DrawTextEx(customFont,
-                   "[C] Cambiar Algoritmo | [UP]/[DOWN] Cambiar N | [M] Menu",
-                   {15, 210}, 16, 1, GRAY);
+                   TextFormat("Comprobaciones / Nodos: %d", totalChecks),
+                   {25, 180}, 18, 1, LIGHTGRAY);
+
+        DrawTextEx(
+            customFont,
+            "[C] Algoritmo | [D] Distribucion | [UP]/[DOWN] Tamano | [M] Menu",
+            {15, 240}, 16, 1, GRAY);
 
       } else { // MODO JUEGO
         QuadTree drawTree(screenBounds, 4);
@@ -395,7 +460,7 @@ int main() {
     }
     EndDrawing();
   }
-  UnloadFont(customFont); // Liberar memoria de la fuente
+  UnloadFont(customFont);
   CloseWindow();
   return 0;
 }
