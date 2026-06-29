@@ -1,0 +1,23 @@
+LIBRARY raylib.dll
+EXPORTS
+    BeginDrawing
+    ClearBackground
+    CloseWindow
+    DrawCircle
+    DrawCircleLines
+    DrawRectangle
+    DrawRectangleLines
+    DrawTextEx
+    EndDrawing
+    Fade
+    GetMouseX
+    GetMouseY
+    GetRandomValue
+    InitWindow
+    IsKeyPressed
+    LoadFontEx
+    MeasureTextEx
+    SetTargetFPS
+    TextFormat
+    UnloadFont
+    WindowShouldClose
