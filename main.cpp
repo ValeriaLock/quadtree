@@ -27,56 +27,96 @@ vector<Particle> entities;
 vector<Particle> visParticles;
 int nextId = 1;
 
-// Variables para la Comparación Experimental
-bool useQuadTree = true;
-long long timeTakenUs = 0;
-int totalChecks = 0;
+// --- Parámetros configurables (modo Visualización) ---
 int currentVisCount = 1000;
+double visRadius = 5.0;
+double visSpeedFactor = 3.0;
+int qtCapacity = 4;
+int spaceW = 1000;
+int spaceH = 800;
+bool runBruteForce = true;
+
+// --- Métricas instantáneas ---
+long long timeQtUs = 0;
+long long timeBuildUs = 0;
+long long timeQueryUs = 0;
+long long timeBruteUs = 0;
+int checksQt = 0;
+int checksBrute = 0;
+int totalCandidatesQt = 0;
+
+// --- Métricas promedio ---
+int frameCount = 0;
+long long accumTimeQt = 0, accumTimeBuild = 0, accumTimeQuery = 0,
+          accumTimeBrute = 0;
+long long accumChecksQt = 0, accumChecksBrute = 0;
+long long accumCandidatesQt = 0;
+
+// --- Métricas modo juego ---
+long long gameTimeTakenUs = 0;
+int gameTotalChecks = 0;
+
+void ResetAverages() {
+  frameCount = 0;
+  accumTimeQt = 0;
+  accumTimeBuild = 0;
+  accumTimeQuery = 0;
+  accumTimeBrute = 0;
+  accumChecksQt = 0;
+  accumChecksBrute = 0;
+  accumCandidatesQt = 0;
+}
 
 void SetupVisualizationMode(int count, Distribution dist) {
   visParticles.clear();
   nextId = 1;
+  ResetAverages();
 
-  vector<Vector2> clusters = {{200, 200}, {800, 200}, {500, 600}};
+  float cx1 = spaceW * 0.2f, cy1 = spaceH * 0.25f;
+  float cx2 = spaceW * 0.8f, cy2 = spaceH * 0.25f;
+  float cx3 = spaceW * 0.5f, cy3 = spaceH * 0.75f;
+  vector<Vector2> clusters = {{cx1, cy1}, {cx2, cy2}, {cx3, cy3}};
+
+  int margin = (int)visRadius + 2;
 
   for (int i = 0; i < count; i++) {
-    double vx = (GetRandomValue(0, 100) / 50.0) - 1.0;
-    double vy = (GetRandomValue(0, 100) / 50.0) - 1.0;
+    double vx = ((GetRandomValue(0, 100) / 50.0) - 1.0) * visSpeedFactor;
+    double vy = ((GetRandomValue(0, 100) / 50.0) - 1.0) * visSpeedFactor;
     if (vx == 0 && vy == 0) {
-      vx = 0.5;
-      vy = 0.5;
+      vx = 0.5 * visSpeedFactor;
+      vy = 0.5 * visSpeedFactor;
     }
 
-    double px, py;
+    double px = 0, py = 0;
 
     if (dist == UNIFORM) {
-      px = GetRandomValue(20, WIDTH - 20);
-      py = GetRandomValue(20, HEIGHT - 20);
+      px = GetRandomValue(margin, spaceW - margin);
+      py = GetRandomValue(margin, spaceH - margin);
     } else if (dist == CLUSTER) {
       int c = GetRandomValue(0, 2);
       px = clusters[c].x + GetRandomValue(-100, 100);
       py = clusters[c].y + GetRandomValue(-100, 100);
-    } else if (dist == HIGH_DENSITY) {
+    } else { // HIGH_DENSITY
       if (GetRandomValue(1, 100) <= 80) {
-        px = WIDTH / 2 + GetRandomValue(-150, 150);
-        py = HEIGHT / 2 + GetRandomValue(-150, 150);
+        px = spaceW / 2 + GetRandomValue(-150, 150);
+        py = spaceH / 2 + GetRandomValue(-150, 150);
       } else {
-        px = GetRandomValue(20, WIDTH - 20);
-        py = GetRandomValue(20, HEIGHT - 20);
+        px = GetRandomValue(margin, spaceW - margin);
+        py = GetRandomValue(margin, spaceH - margin);
       }
     }
 
-    if (px < 20)
-      px = 20;
-    if (px > WIDTH - 20)
-      px = WIDTH - 20;
-    if (py < 20)
-      py = 20;
-    if (py > HEIGHT - 20)
-      py = HEIGHT - 20;
+    if (px < margin)
+      px = margin;
+    if (px > spaceW - margin)
+      px = spaceW - margin;
+    if (py < margin)
+      py = margin;
+    if (py > spaceH - margin)
+      py = spaceH - margin;
 
-    visParticles.push_back({nextId++, px, py, vx * 3.0, vy * 3.0, 5.0, false,
-                            false, false, false});
+    visParticles.push_back(
+        {nextId++, px, py, vx, vy, visRadius, false, false, false, false});
   }
 }
 
@@ -93,7 +133,6 @@ void SpawnEnemy() {
     vx = 1;
     vy = 1;
   }
-
   entities.push_back({nextId++, (double)(GetRandomValue(50, WIDTH - 50)),
                       (double)(GetRandomValue(50, HEIGHT - 50)), vx * 2.5,
                       vy * 2.5, (double)GetRandomValue(15, 30), false, true,
@@ -151,88 +190,172 @@ int main() {
     if (IsKeyPressed(KEY_M))
       currentScreen = MENU;
 
-    Rectangle2D screenBounds = {0, 0, (double)WIDTH, (double)HEIGHT};
-
     if (currentScreen == VISUALIZATION) {
-      if (IsKeyPressed(KEY_C))
-        useQuadTree = !useQuadTree;
+      bool needsReset = false;
 
+      // --- Controles de parámetros configurables ---
       if (IsKeyPressed(KEY_D)) {
-        int nextDist = (currentDist + 1) % 3;
-        currentDist = static_cast<Distribution>(nextDist);
-        SetupVisualizationMode(currentVisCount, currentDist);
+        currentDist = static_cast<Distribution>((currentDist + 1) % 3);
+        needsReset = true;
       }
-
       if (IsKeyPressed(KEY_UP)) {
         currentVisCount += 1000;
-        SetupVisualizationMode(currentVisCount, currentDist);
+        needsReset = true;
       }
       if (IsKeyPressed(KEY_DOWN) && currentVisCount > 1000) {
         currentVisCount -= 1000;
-        SetupVisualizationMode(currentVisCount, currentDist);
+        needsReset = true;
       }
+      // Espacio 2D: W/S
+      if (IsKeyPressed(KEY_W) && spaceW < 1600) {
+        spaceW += 100;
+        spaceH = (int)(spaceW * 0.8);
+        needsReset = true;
+      }
+      if (IsKeyPressed(KEY_S) && spaceW > 400) {
+        spaceW -= 100;
+        spaceH = (int)(spaceW * 0.8);
+        needsReset = true;
+      }
+      // Capacidad del QuadTree: Q/E
+      if (IsKeyPressed(KEY_Q) && qtCapacity > 1) {
+        qtCapacity--;
+        needsReset = true;
+      }
+      if (IsKeyPressed(KEY_E) && qtCapacity < 16) {
+        qtCapacity++;
+        needsReset = true;
+      }
+      // Radio de partículas: R/F
+      if (IsKeyPressed(KEY_R) && visRadius < 20.0) {
+        visRadius += 1.0;
+        needsReset = true;
+      }
+      if (IsKeyPressed(KEY_F) && visRadius > 2.0) {
+        visRadius -= 1.0;
+        needsReset = true;
+      }
+      // Velocidad: V/B (se puede cambiar sin reiniciar)
+      if (IsKeyPressed(KEY_V) && visSpeedFactor < 10.0) {
+        visSpeedFactor += 0.5;
+        needsReset = true;
+      }
+      if (IsKeyPressed(KEY_B) && visSpeedFactor > 0.5) {
+        visSpeedFactor -= 0.5;
+        needsReset = true;
+      }
+      // Toggle fuerza bruta: C
+      if (IsKeyPressed(KEY_C)) {
+        runBruteForce = !runBruteForce;
+        ResetAverages();
+      }
+
+      if (needsReset)
+        SetupVisualizationMode(currentVisCount, currentDist);
+
+      // --- Actualizar posiciones ---
+      Rectangle2D spaceBounds = {0, 0, (double)spaceW, (double)spaceH};
 
       for (auto &p : visParticles) {
         p.x += p.vx;
         p.y += p.vy;
-        if (p.x - p.radius < 0 || p.x + p.radius > WIDTH)
+        if (p.x - p.radius < 0 || p.x + p.radius > spaceW)
           p.vx *= -1;
-        if (p.y - p.radius < 0 || p.y + p.radius > HEIGHT)
+        if (p.y - p.radius < 0 || p.y + p.radius > spaceH)
           p.vy *= -1;
+        p.x = fmax(p.radius, fmin(p.x, spaceW - p.radius));
+        p.y = fmax(p.radius, fmin(p.y, spaceH - p.radius));
 
         p.highlighted = false;
         p.isFood = false;
       }
 
-      auto start = chrono::high_resolution_clock::now();
-      totalChecks = 0;
+      // =============================================
+      //  QUADTREE: Construcción
+      // =============================================
+      auto startBuild = chrono::high_resolution_clock::now();
+      QuadTree qtree(spaceBounds, qtCapacity);
+      for (const auto &p : visParticles)
+        qtree.insert(p);
+      auto endBuild = chrono::high_resolution_clock::now();
+      timeBuildUs =
+          chrono::duration_cast<chrono::microseconds>(endBuild - startBuild)
+              .count();
 
-      if (useQuadTree) {
-        QuadTree qtree(screenBounds, 4);
-        for (const auto &p : visParticles)
-          qtree.insert(p);
+      // =============================================
+      //  QUADTREE: Consultas
+      // =============================================
+      auto startQuery = chrono::high_resolution_clock::now();
+      checksQt = 0;
+      totalCandidatesQt = 0;
 
-        for (size_t i = 0; i < visParticles.size(); i++) {
-          auto &p = visParticles[i];
-          Rectangle2D areaDeChoque = {p.x - p.radius * 2, p.y - p.radius * 2,
-                                      p.radius * 4, p.radius * 4};
-          vector<Particle> vecindario;
-          qtree.query(areaDeChoque, vecindario, totalChecks);
+      for (size_t i = 0; i < visParticles.size(); i++) {
+        auto &p = visParticles[i];
+        vector<Particle> vecindario;
+        qtree.queryRadius(p.x, p.y, p.radius * 2.0, vecindario, checksQt);
 
-          for (const auto &vecino : vecindario) {
-            if (vecino.id == p.id)
-              continue;
-            totalChecks++;
+        int candidatos = 0;
+        for (const auto &vecino : vecindario) {
+          if (vecino.id == p.id)
+            continue;
+          candidatos++;
+          checksQt++;
 
-            if (i == 0) {
-              for (auto &vp : visParticles) {
-                if (vp.id == vecino.id)
-                  vp.isFood = true;
-              }
-            }
-
-            double dist = hypot(p.x - vecino.x, p.y - vecino.y);
-            if (dist < p.radius + vecino.radius) {
-              p.highlighted = true;
+          // Marcar candidatos de la partícula 0 para visualización
+          if (i == 0) {
+            for (auto &vp : visParticles) {
+              if (vp.id == vecino.id)
+                vp.isFood = true;
             }
           }
+
+          double dist = hypot(p.x - vecino.x, p.y - vecino.y);
+          if (dist < p.radius + vecino.radius) {
+            p.highlighted = true;
+          }
         }
-      } else {
+        totalCandidatesQt += candidatos;
+      }
+      auto endQuery = chrono::high_resolution_clock::now();
+      timeQueryUs =
+          chrono::duration_cast<chrono::microseconds>(endQuery - startQuery)
+              .count();
+
+      timeQtUs = timeBuildUs + timeQueryUs; // Total para referencia
+
+      // =============================================
+      //  FUERZA BRUTA: medición solamente
+      // =============================================
+      if (runBruteForce) {
+        auto startBrute = chrono::high_resolution_clock::now();
+        checksBrute = 0;
+
         for (size_t i = 0; i < visParticles.size(); i++) {
           for (size_t j = i + 1; j < visParticles.size(); j++) {
-            totalChecks++;
-            double dist = hypot(visParticles[i].x - visParticles[j].x,
-                                visParticles[i].y - visParticles[j].y);
-            if (dist < visParticles[i].radius + visParticles[j].radius) {
-              visParticles[i].highlighted = true;
-              visParticles[j].highlighted = true;
-            }
+            checksBrute++;
+            hypot(visParticles[i].x - visParticles[j].x,
+                  visParticles[i].y - visParticles[j].y);
           }
         }
+
+        auto endBrute = chrono::high_resolution_clock::now();
+        timeBruteUs =
+            chrono::duration_cast<chrono::microseconds>(endBrute - startBrute)
+                .count();
       }
-      auto end = chrono::high_resolution_clock::now();
-      timeTakenUs =
-          chrono::duration_cast<chrono::microseconds>(end - start).count();
+
+      // --- Acumular promedios ---
+      frameCount++;
+      accumTimeBuild += timeBuildUs;
+      accumTimeQuery += timeQueryUs;
+      accumTimeQt += timeQtUs;
+      accumChecksQt += checksQt;
+      accumCandidatesQt += totalCandidatesQt;
+      if (runBruteForce) {
+        accumTimeBrute += timeBruteUs;
+        accumChecksBrute += checksBrute;
+      }
+
     } else if (currentScreen == GAME_MODE) {
       int dummy = 0;
       int currentFoodCount = 0, currentEnemyCount = 0;
@@ -274,17 +397,21 @@ int main() {
         }
       }
 
+      Rectangle2D screenBounds = {0, 0, (double)WIDTH, (double)HEIGHT};
+
+      auto gameStart = chrono::high_resolution_clock::now();
+      gameTotalChecks = 0;
+
       QuadTree qtree(screenBounds, 4);
       for (const auto &e : entities)
         qtree.insert(e);
       qtree.insert(player);
 
       vector<int> idsToRemove;
-      Rectangle2D playerBox = {player.x - player.radius,
-                               player.y - player.radius, player.radius * 2,
-                               player.radius * 2};
+
       vector<Particle> playerNearby;
-      qtree.query(playerBox, playerNearby, dummy);
+      qtree.queryRadius(player.x, player.y, player.radius * 2.0, playerNearby,
+                        gameTotalChecks);
 
       for (const auto &n : playerNearby) {
         if (n.isPlayer)
@@ -311,10 +438,9 @@ int main() {
       for (auto &e : entities) {
         if (!e.isEnemy)
           continue;
-        Rectangle2D enemyBox = {e.x - e.radius, e.y - e.radius, e.radius * 2,
-                                e.radius * 2};
         vector<Particle> enemyNearby;
-        qtree.query(enemyBox, enemyNearby, dummy);
+        qtree.queryRadius(e.x, e.y, e.radius * 2.0, enemyNearby,
+                          gameTotalChecks);
 
         for (const auto &n : enemyNearby) {
           if (n.id == e.id || n.isPlayer)
@@ -349,6 +475,11 @@ int main() {
         }
         entities = remainingEntities;
       }
+
+      auto gameEnd = chrono::high_resolution_clock::now();
+      gameTimeTakenUs =
+          chrono::duration_cast<chrono::microseconds>(gameEnd - gameStart)
+              .count();
     }
 
     // --- RENDERIZADO (DRAW) ---
@@ -371,70 +502,170 @@ int main() {
                  LIGHTGRAY);
       DrawTextEx(customFont, opt2, {(WIDTH - opt2Size.x) / 2, 440}, 24, 2,
                  LIGHTGRAY);
+
     } else {
       ClearBackground(bgColor);
 
       if (currentScreen == VISUALIZATION) {
-        if (useQuadTree) {
-          QuadTree drawTree(screenBounds, 4);
-          for (const auto &p : visParticles)
-            drawTree.insert(p);
-          drawTree.drawLines();
+        Rectangle2D spaceBounds = {0, 0, (double)spaceW, (double)spaceH};
 
-          if (!visParticles.empty()) {
-            Particle p0 = visParticles[0];
-            DrawRectangleLines(p0.x - p0.radius * 2, p0.y - p0.radius * 2,
-                               p0.radius * 4, p0.radius * 4, YELLOW);
-            DrawCircleLines(p0.x, p0.y, p0.radius + 15, YELLOW);
-          }
+        // Dibujar borde del espacio de simulación si es menor que la ventana
+        if (spaceW < WIDTH || spaceH < HEIGHT) {
+          DrawRectangleLines(0, 0, spaceW, spaceH, DARKGRAY);
         }
 
+        // Dibujar subdivisiones del QuadTree
+        QuadTree drawTree(spaceBounds, qtCapacity);
+        for (const auto &p : visParticles)
+          drawTree.insert(p);
+        drawTree.drawLines();
+
+        // Visualización de la consulta sobre la partícula 0
+        if (!visParticles.empty()) {
+          Particle p0 = visParticles[0];
+          DrawCircleLines((int)p0.x, (int)p0.y, (int)(p0.radius * 2.0), YELLOW);
+          DrawRectangleLines((int)(p0.x - p0.radius * 2),
+                             (int)(p0.y - p0.radius * 2), (int)(p0.radius * 4),
+                             (int)(p0.radius * 4), Fade(YELLOW, 0.4f));
+        }
+
+        // Dibujar partículas
         for (size_t i = 0; i < visParticles.size(); i++) {
           const auto &p = visParticles[i];
           Color c = colorVisNormal;
-          if (useQuadTree && p.isFood && i != 0)
+          if (p.isFood && i != 0)
             c = colorCandidate;
           if (p.highlighted)
             c = colorVisHighlight;
           if (i == 0)
             c = BLUE;
-
           DrawCircle(p.x, p.y, p.radius, c);
         }
 
-        DrawRectangle(10, 10, 520, 220, Fade(BLACK, 0.8f));
+        // ==================
+        //  PANEL DE MÉTRICAS
+        // ==================
+        int panelW = 590;
+        int panelH = 370; // Aumentado para acomodar las nuevas métricas
+        DrawRectangle(10, 10, panelW, panelH, Fade(BLACK, 0.85f));
 
-        DrawTextEx(customFont, "MODO 1: Analisis de Rendimiento", {25, 20}, 24,
-                   1, WHITE);
-        DrawTextEx(customFont,
-                   TextFormat("Algoritmo: %s", useQuadTree
-                                                   ? "QUADTREE (O(N log N))"
-                                                   : "FUERZA BRUTA (O(N^2))"),
-                   {25, 60}, 20, 1, useQuadTree ? GREEN : RED);
+        int lx = 25; // left x
+        int y = 20;
 
+        DrawTextEx(customFont, "MODO 1: Analisis de Rendimiento",
+                   {(float)lx, (float)y}, 24, 1, WHITE);
+        y += 35;
+
+        // Línea de parámetros 1
         string distStr = (currentDist == UNIFORM)   ? "Uniforme"
                          : (currentDist == CLUSTER) ? "Clusters"
                                                     : "Alta Densidad";
-        DrawTextEx(customFont,
-                   TextFormat("Distribucion [D]: %s", distStr.c_str()),
-                   {25, 90}, 18, 1, YELLOW);
         DrawTextEx(
             customFont,
-            TextFormat("Tamano de entrada (N): %d particulas", currentVisCount),
-            {25, 120}, 18, 1, LIGHTGRAY);
-        DrawTextEx(customFont,
-                   TextFormat("Tiempo de ejecucion: %lld us", timeTakenUs),
-                   {25, 150}, 18, 1, LIGHTGRAY);
-        DrawTextEx(customFont,
-                   TextFormat("Comprobaciones / Nodos: %d", totalChecks),
-                   {25, 180}, 18, 1, LIGHTGRAY);
+            TextFormat("N: %d | Dist: %s", currentVisCount, distStr.c_str()),
+            {(float)lx, (float)y}, 17, 1, YELLOW);
+        y += 22;
 
+        // Línea de parámetros 2
         DrawTextEx(
             customFont,
-            "[C] Algoritmo | [D] Distribucion | [UP]/[DOWN] Tamano | [M] Menu",
-            {15, 240}, 16, 1, GRAY);
+            TextFormat("Espacio: %dx%d | Cap: %d | Radio: %.1f | Vel: %.1f",
+                       spaceW, spaceH, qtCapacity, visRadius, visSpeedFactor),
+            {(float)lx, (float)y}, 17, 1, LIGHTGRAY);
+        y += 28;
+
+        // --- QUADTREE ---
+        DrawTextEx(customFont, "QUADTREE", {(float)lx, (float)y}, 18, 1, GREEN);
+        y += 22;
+
+        long long avgTimeBuild =
+            frameCount > 0 ? accumTimeBuild / frameCount : 0;
+        long long avgTimeQuery =
+            frameCount > 0 ? accumTimeQuery / frameCount : 0;
+        long long avgTimeQt = frameCount > 0 ? accumTimeQt / frameCount : 0;
+
+        long long avgChecksQt = frameCount > 0 ? accumChecksQt / frameCount : 0;
+        double avgCandPerObjQt =
+            (frameCount > 0 && currentVisCount > 0)
+                ? (double)accumCandidatesQt /
+                      ((long long)frameCount * currentVisCount)
+                : 0.0;
+        double candPerObjQt = currentVisCount > 0
+                                  ? (double)totalCandidatesQt / currentVisCount
+                                  : 0.0;
+
+        DrawTextEx(customFont,
+                   TextFormat("  Construccion: %lld us (prom: %lld us)",
+                              timeBuildUs, avgTimeBuild),
+                   {(float)lx, (float)y}, 16, 1, WHITE);
+        y += 20;
+        DrawTextEx(customFont,
+                   TextFormat("  Consultas:    %lld us (prom: %lld us)",
+                              timeQueryUs, avgTimeQuery),
+                   {(float)lx, (float)y}, 16, 1, WHITE);
+        y += 20;
+        DrawTextEx(customFont,
+                   TextFormat("  Total:        %lld us (prom: %lld us)",
+                              timeQtUs, avgTimeQt),
+                   {(float)lx, (float)y}, 16, 1, WHITE);
+        y += 20;
+        DrawTextEx(
+            customFont,
+            TextFormat("  Checks: %d (prom: %lld)", checksQt, avgChecksQt),
+            {(float)lx, (float)y}, 16, 1, WHITE);
+        y += 20;
+        DrawTextEx(customFont,
+                   TextFormat("  Candidatos/obj: %.1f (prom: %.1f)",
+                              candPerObjQt, avgCandPerObjQt),
+                   {(float)lx, (float)y}, 16, 1, WHITE);
+        y += 28;
+
+        // --- FUERZA BRUTA ---
+        DrawTextEx(customFont,
+                   TextFormat("FUERZA BRUTA %s",
+                              runBruteForce ? "" : "(OFF - pulsa C)"),
+                   {(float)lx, (float)y}, 18, 1, RED);
+        y += 22;
+
+        if (runBruteForce) {
+          long long avgTimeBrute =
+              frameCount > 0 ? accumTimeBrute / frameCount : 0;
+          long long avgChecksBrute =
+              frameCount > 0 ? accumChecksBrute / frameCount : 0;
+
+          DrawTextEx(customFont,
+                     TextFormat("  Tiempo: %lld us (prom: %lld us)",
+                                timeBruteUs, avgTimeBrute),
+                     {(float)lx, (float)y}, 16, 1, WHITE);
+          y += 20;
+          DrawTextEx(customFont,
+                     TextFormat("  Checks: %d (prom: %lld)", checksBrute,
+                                avgChecksBrute),
+                     {(float)lx, (float)y}, 16, 1, WHITE);
+          y += 20;
+          DrawTextEx(customFont,
+                     TextFormat("  Candidatos/obj: %d", currentVisCount - 1),
+                     {(float)lx, (float)y}, 16, 1, WHITE);
+        } else {
+          DrawTextEx(customFont, "  (Desactivado para mejor FPS)",
+                     {(float)lx, (float)y}, 16, 1, GRAY);
+          y += 20;
+        }
+        y += 28;
+
+        // --- Controles ---
+        DrawTextEx(customFont,
+                   "[D] Dist | [UP/DOWN] N | [W/S] Espacio | [Q/E] Capacidad",
+                   {(float)lx, (float)y}, 14, 1, GRAY);
+        y += 18;
+        DrawTextEx(
+            customFont,
+            "[R/F] Radio | [V/B] Velocidad | [C] Bruta ON/OFF | [M] Menu",
+            {(float)lx, (float)y}, 14, 1, GRAY);
 
       } else { // MODO JUEGO
+        Rectangle2D screenBounds = {0, 0, (double)WIDTH, (double)HEIGHT};
+
         QuadTree drawTree(screenBounds, 4);
         for (const auto &e : entities)
           drawTree.insert(e);
@@ -447,14 +678,27 @@ int main() {
         }
         DrawCircle(player.x, player.y, player.radius, colorPlayer);
 
-        DrawRectangle(10, 10, 400, 80, Fade(BLACK, 0.7f));
+        // Panel de métricas del modo juego
+        DrawRectangle(10, 10, 430, 130, Fade(BLACK, 0.7f));
+
         string status = "MODO 2: Tu Radio: " + to_string((int)player.radius) +
                         " / " + to_string((int)MAX_PLAYER_RADIUS);
         if (player.radius >= MAX_PLAYER_RADIUS)
           status += " (MAX!)";
 
+        int totalEntities = (int)entities.size() + 1;
+        int bruteForceChecks = totalEntities * (totalEntities - 1) / 2;
+
         DrawTextEx(customFont, status.c_str(), {20, 20}, 22, 1, WHITE);
-        DrawTextEx(customFont, "[M] Regresar al Menu", {20, 50}, 18, 1,
+        DrawTextEx(customFont,
+                   TextFormat("QuadTree  - Tiempo: %lld us | Checks: %d",
+                              gameTimeTakenUs, gameTotalChecks),
+                   {20, 55}, 17, 1, GREEN);
+        DrawTextEx(customFont,
+                   TextFormat("Fuerza Bruta (estimado) - Checks: %d",
+                              bruteForceChecks),
+                   {20, 82}, 17, 1, RED);
+        DrawTextEx(customFont, "[M] Regresar al Menu", {20, 110}, 17, 1,
                    LIGHTGRAY);
       }
     }

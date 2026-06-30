@@ -2,9 +2,11 @@
 #define QUADTREE_H
 
 #include "Particle.h"
+#include <cmath>
 #include <raylib.h>
 #include <vector>
 using namespace std;
+
 class QuadTree {
 private:
   int capacity;
@@ -86,7 +88,28 @@ public:
     }
   }
 
-  // Dibujo multiplataforma usando raylib
+  void queryRadius(double cx, double cy, double radius, vector<Particle> &found,
+                   int &nodesVisited) {
+    nodesVisited++;
+    Rectangle2D radiusBounds = {cx - radius, cy - radius, radius * 2.0,
+                                radius * 2.0};
+    if (!boundary.intersects(radiusBounds))
+      return;
+
+    for (const auto &p : particles) {
+      double dist = hypot(p.x - cx, p.y - cy);
+      if (dist <= radius)
+        found.push_back(p);
+    }
+
+    if (divided) {
+      northwest->queryRadius(cx, cy, radius, found, nodesVisited);
+      northeast->queryRadius(cx, cy, radius, found, nodesVisited);
+      southwest->queryRadius(cx, cy, radius, found, nodesVisited);
+      southeast->queryRadius(cx, cy, radius, found, nodesVisited);
+    }
+  }
+
   void drawLines() {
     DrawRectangleLines(boundary.x, boundary.y, boundary.width, boundary.height,
                        LIGHTGRAY);
